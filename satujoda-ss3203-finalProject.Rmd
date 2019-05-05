@@ -1,0 +1,375 @@
+---
+title: "satujoda-ss3203-finalProject"
+author: "Shanmukha Srivathsav Satujoda"
+date: "May 3, 2019"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+#Loading all the required libraries
+library(rvest)
+library(stringr)
+library(lubridate)
+library(tidytext)
+library(tidyverse)
+library(stringr)
+library(wordcloud)
+library(magrittr)
+library(ggplot2)
+library(RCurl)
+library(utils)
+library(readxl)
+library(data.table)
+library(tidyr)
+library(sentimentr)
+```
+
+
+
+```{r}
+#Scraping function to scrape The Godfather movie reviews, rating and review date from metacritic.com
+collect_data_metacritic <- function(url){
+  #Reading the url
+  meta_god <- read_html(url)
+  
+  #Getting the Rating of the user 
+  rating_data<- html_nodes(meta_god,'.indiv') %>% html_text() %>% as.data.frame()
+  colnames(rating_data)[1] <- "Rating"
+  
+  #Getting the review of the user
+  review_data <- html_nodes(meta_god,'.review_body') %>% html_text() %>% as.data.frame()
+  review_data <- as.data.frame(review_data[-1,])
+  colnames(review_data)[1] <- "Review"
+  
+  #Getting the Review Date for reviews
+  review_date <- html_nodes(meta_god, '.date')
+  review_date <- html_nodes(meta_god, '.date') %>% html_text() %>% as.data.frame()
+  colnames(review_date)[1] <- "reviewDate"
+  
+  #Creating arbirary id for joining
+  createID <- function(df){
+    df$id = 0
+    for(x in 1:nrow(df)){
+      df$id[x] = x
+    }
+    return(df)
+  }
+  rating_data <- createID(rating_data)
+  review_data <- createID(review_data)
+  review_date <- createID(review_date)
+  
+  #join using ids to create a dataframe
+  
+  data<- left_join(rating_data, review_data, by='id') %>% left_join(., review_date, by='id')
+  data<- data[,-c(2)]
+  return(data)
+  
+}
+```
+
+
+```{r}
+
+#There are 4 pages of reviews, so storing all the page urls 
+url_page0 = "https://www.metacritic.com/movie/the-godfather/user-reviews?sort-by=date&num_items=100&page=0"
+url_page1 = "https://www.metacritic.com/movie/the-godfather/user-reviews?sort-by=date&num_items=100&page=1"
+url_page2 = "https://www.metacritic.com/movie/the-godfather/user-reviews?sort-by=date&num_items=100&page=2"
+url_page3 = "https://www.metacritic.com/movie/the-godfather/user-reviews?sort-by=date&num_items=100&page=3"
+
+#Creating temporary data frames for the each scraped data from the above mentioned pages
+#which are used later to form the entire data set
+temp_data1 <- collect_data_metacritic(url_page0)
+temp_data2 <- collect_data_metacritic(url_page1)
+temp_data3 <- collect_data_metacritic(url_page2)
+temp_data4 <- collect_data_metacritic(url_page3)
+
+
+#Combining data from different web pages to a single dataframe
+temp_data <- rbind(temp_data1,temp_data2,temp_data3,temp_data4)
+
+
+```
+
+```{r}
+#This function is used for preprocessig the data:
+preprocessing<-function(df){
+  #direct conversion to numeric data is replacing the rating with level rather than the actual rating
+  df$Rating <- as.numeric(as.character(df$Rating))
+  df$Review <- (as.character(df$Review))
+  
+  #Removing the special characters, leading, trailing white spaces
+  for(x in 1:nrow(df)){
+    df$Review[x] <- trimws(gsub("\r?\n|\r", " ", temp_data$Review[x]))
+    df$Review[x] <- str_replace_all(df$Review[x], "[^[:alnum:]]", " ")
+    #Merging multiple white spaces to one white space
+    #NODE                     EXPLANATION
+    #--------------------------------------------------------------------------------
+    #(?<=                     look behind to see if there is:
+    # --------------------------------------------------------------------------------
+    #[\s]                     any character of: whitespace (\n, \r, \t, \f, and " ")
+    # --------------------------------------------------------------------------------
+    #)                        end of look-behind
+    #--------------------------------------------------------------------------------
+    #\s*                      whitespace (\n, \r, \t, \f, and " ") (0 or
+    #                         more times (matching the most amount
+    #                         possible))
+    #--------------------------------------------------------------------------------
+    # |                       OR
+    #--------------------------------------------------------------------------------
+    #  ^                      the beginning of the string
+    #--------------------------------------------------------------------------------
+    #\s+                      whitespace (\n, \r, \t, \f, and " ") (1 or
+    #                         more times (matching the most amount
+    #                         possible))
+    #--------------------------------------------------------------------------------
+    #$                        before an optional \n, and the end of the
+    #                         string
+    df$Review[x] <- gsub("(?<=[\\s])\\s*|^\\s+|\\s+$", "", df$Review[x], perl=TRUE)
+    
+    
+  }
+  return(df)
+  
+}
+
+
+```
+
+
+```{r}
+#Finally applying the preprocessing function on the data 
+metacritic_data<-preprocessing(temp_data)
+
+```
+
+
+```{r}
+#Converting date to date format
+metacritic_data$reviewDate<- as.character(as.Date(metacritic_data$reviewDate,format='%B %d, %Y'))
+
+#Extracting the year and adding a new column
+a = ymd(metacritic_data$reviewDate)
+metacritic_data$rating_year = year(a)
+```
+
+```{r}
+#Saving the processed data as a CSV
+write.csv(metacritic_data, "metacritic_data.csv")
+
+```
+#Visualizations
+
+```{r}
+
+#Number of reviews across the years
+#To obtain this we group by year and calculate the frequency
+number_of_reviews_across_years <- metacritic_data%>%
+  group_by(rating_year)%>%
+  summarise(freq=n())
+
+head(number_of_reviews_across_years)
+
+#Visualizing the above data as a histogram
+p<-ggplot(data=number_of_reviews_across_years, aes(x=rating_year, y=freq)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  theme_minimal()+labs(title = "Number of Ratings Across Years")
+p
+
+
+
+```
+
+
+```{r}
+
+#Considering a rating above 7.5 to be positve we want to see how the positive reviews are distributed over time
+positive_rating<-metacritic_data%>%filter(Rating>7.5)
+positive_rating_per_year <- positive_rating%>%   
+  group_by(rating_year)%>%
+  summarise(freq=n())
+
+head(positive_rating_per_year)
+
+#Visualising over a bar plot
+ggplot(data=positive_rating_per_year, aes(x=rating_year, y=freq)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  theme_minimal()+labs(title = "Number of Positive Ratings Across Years")
+
+```
+
+```{r}
+#Any rating below 7.5 is considered to be negative, after defining this metric we can see the distribution of the 
+#negative reviews
+negative_ratings<-metacritic_data%>%filter(Rating<=7.5)
+negative_ratings_per_year <- negative_ratings%>%   
+  group_by(rating_year)%>%
+  summarise(freq=n())
+
+head(negative_ratings_per_year)
+
+#Visualising the above data
+ggplot(data=negative_ratings_per_year, aes(x=rating_year, y=freq)) +
+  geom_bar(stat="identity", fill="steelblue")+
+  theme_minimal()+labs(title = "Number of Negative Ratings Across Years")
+
+
+```
+
+#Sentiment Anlysis
+```{r}
+#Unnesting all the reviews as a column Word
+meta<-metacritic_data %>% unnest_tokens(word, Review)
+
+#Removing all the stop words and counting the frequency
+meta_non_stop<-meta%>%
+  anti_join(stop_words) %>%
+  count(word, sort = TRUE)
+
+#top ten words
+top_10 <-head(meta_non_stop,10)
+top_10
+
+```
+
+```{r}
+#Creating the wordcloud from 100
+meta_non_stop %>%with(wordcloud(word, n, max.words = 100))
+
+```
+
+
+
+
+```{r}
+
+#Creating a tible
+meta.tbl<-metacritic_data
+
+#Adding the bigram token in unnest_tokes
+meta_bi <-meta.tbl %>%
+  unnest_tokens(bigram, Review, token = "ngrams", n = 2)
+
+#Removing the stop words
+meta_bi_separated <- meta_bi %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+meta_bi_filtered <- meta_bi_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+#finding the top 10 bigrams
+counted_bigrams<-meta_bi_filtered %>%
+  count(word1, word2, sort = TRUE)
+top_10_bigrams<-head(counted_bigrams,10)
+top_10_bigrams
+
+#As expected the most common bigrams are names of people or actors in the movie
+```
+
+```{r, echo=FALSE}
+#User defined sentiment score calculator
+
+#Taking the first review (for the sake of an example), splitting it by " " and feeding the words as values to a column in a dataframe
+df = as.data.frame(strsplit(metacritic_data$Review[1], " "))
+
+#Changing the column name 
+colnames(df)[1] <- "word"
+
+#Removing the stop words from the sentence
+df_stop<-df%>%
+  anti_join(stop_words) %>%
+  count(word, sort = TRUE)
+
+#Calculating the sentiment score for all the words
+df_senti <- df_stop %>% inner_join(get_sentiments("bing")) %>%spread(sentiment, n, fill = 0) %>%
+  mutate(sentiment = positive - negative)
+
+head(df_senti)
+
+#Adding up all the sentiment scores from the columns
+final_sentiment_score = sum(df_senti$sentiment)
+
+#The final sentiment score of the entire review
+print("The final sentiment score of the entire review is: ")
+final_sentiment_score
+
+```
+```{r}
+#The final sentiment score of the entire review
+print("The final sentiment score of the entire review is: ")
+final_sentiment_score
+```
+
+
+```{r}
+
+#Calculating the sentiment score using the sentmentr package
+metacritic_data$SentimentScore =  (sentiment(metacritic_data$Review)$sentiment)*10
+
+#Calculating the mean sentiment score across all the years
+mean_senti  = aggregate(metacritic_data$SentimentScore , by=list(rating_year= metacritic_data$rating_year), FUN= mean) 
+
+#Calculating the mean rating across all years
+mean_rating = aggregate(metacritic_data$Rating , by=list(rating_year= metacritic_data$rating_year), FUN= mean)
+
+colnames(mean_rating)[2] <- "mean_Rating"
+colnames(mean_senti)[2] <- "mean_senti"
+
+#Data frame which contains the mean rating and mean sentiment score
+mean_rating_senti = merge(mean_rating,mean_senti)
+mean_rating_senti
+
+mean_rating_senti_long <- mean_rating_senti %>% gather(mean_Rating, mean_senti, -c(rating_year))
+
+```
+
+
+```{r, echo=FALSE}
+#Comparision between mean rating and mean sentiment score
+
+g <- ggplot(data = mean_rating_senti_long, aes(x = rating_year, y = mean_senti, color = mean_Rating))+geom_smooth()+
+  labs(title = "Comparison of mean rating and mean sentiment score across years", y = "mean_scores")
+g
+
+```
+
+
+```{r, echo=FALSE}
+#normalizing the mean sentiment score and mean rating
+mean_rating_senti$mean_Rating = scale(mean_rating_senti$mean_Rating)
+mean_rating_senti$mean_senti = scale(mean_rating_senti$mean_senti)
+mean_rating_senti_long_normalized <- mean_rating_senti %>% gather(mean_Rating, mean_senti, -c(rating_year))
+
+
+```
+
+
+```{r}
+#Comparision between mean rating and mean sentiment score after normalizing
+g <- ggplot(data = mean_rating_senti_long_normalized, aes(x = rating_year, y = mean_senti, color = mean_Rating))+geom_smooth()+
+  labs(title = "Comparison of mean rating and mean sentiment score across years", y = "mean_scores")
+g
+
+```
+
+```{r}
+#Final comparision between the mean rating and mean sentiment score:
+#The final sentiment score of the entire review
+print("The final sentiment score of the entire review calculated manually is: ")
+final_sentiment_score
+print("The final sentiment score of the entire review calculated using sentimentr is: ")
+metacritic_data$SentimentScore[1]
+print("The user rating is: ")
+metacritic_data$Rating[1]
+
+```
+
+
+
+
+
+
+
+
